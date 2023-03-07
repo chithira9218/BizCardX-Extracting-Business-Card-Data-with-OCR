@@ -1,0 +1,118 @@
+import streamlit as st
+import easyocr
+import PIL
+from PIL import ImageDraw
+import io
+import csv
+import pandas as pd
+import sqlite3
+
+# Set up the Streamlit app title and header
+st.title("BizcardX")
+st.header("Upload your card")
+
+# Allow users to upload a file or enter a file path
+file_type = st.radio("Choose an option:", ("Upload a file", "Enter a file path"))
+bytes_data = None  # Define bytes_data here, with a default value of None
+if file_type == "Upload a file":
+    uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
+    if uploaded_file is not None:
+        bytes_data = uploaded_file.getvalue()
+        im = PIL.Image.open(io.BytesIO(bytes_data))
+        st.image(im)
+else:
+    file_path = st.text_input("Enter file path:")
+    if file_path:
+        with open(file_path, "rb") as f:
+            bytes_data = f.read()
+        im = PIL.Image.open(io.BytesIO(bytes_data))
+        st.image(im)
+
+if bytes_data is not None:  # Add a check to see if bytes_data has been defined
+    # Extract text data from the image using EasyOCR
+    reader = easyocr.Reader(['en'], gpu=False)
+    bounds = reader.readtext(bytes_data)
+
+    # Draw bounding boxes around the text in the image
+    def draw_boxes(image, bounds, color='yellow', width=2):
+        draw = ImageDraw.Draw(image)
+        for bound in bounds:
+            p0, p1, p2, p3 = bound[0]
+            draw.line([*p0, *p1, *p2, *p3, *p0], fill=color, width=width)
+        return image
+
+    #im_with_boxes = draw_boxes(im, bounds)
+    #st.image(im_with_boxes)
+
+    # Save the extracted text data to a CSV file and sqlite database
+    data = []
+    for bound in bounds:
+        text = bound[1]
+        data.append([text])
+
+    conn = sqlite3.connect('card.db')
+    c = conn.cursor()
+
+    # Create a table for storing card data
+    c.execute('''CREATE TABLE IF NOT EXISTS card_data
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  name TEXT,
+                  company TEXT,
+                  email TEXT,
+                  phone TEXT)''')
+    conn.commit()
+
+    # Insert the extracted data into the card_data table
+    name = ""
+    company = ""
+    email = ""
+    phone = ""
+    for bound in bounds:
+        text = bound[1].strip().lower()
+        if 'name' in text:
+            name = bound[1].split('\n')[1]
+        elif 'company' in text or 'firm' in text:
+            company = bound[1].split('\n')[1]
+        elif 'email' in text:
+            email = bound[1].split('\n')[1]
+        elif 'phone' in text or 'mobile' in text:
+            phone = bound[1].split('\n')[1]
+
+    c.execute("INSERT INTO card_data (name, company, email, phone) VALUES (?, ?, ?, ?)", (name, company, email, phone))
+    conn.commit()
+
+    # Display the card data in a table within the Streamlit app
+    st.header("Card Data")
+    df = pd.read_sql_query("SELECT * FROM card_data", conn)
+    st.dataframe(df)
+    # Sidebar for viewing, updating, and deleting card data
+    st.sidebar.title("Card Data")
+    view_data = st.sidebar.checkbox("View Data")
+    if view_data:
+        st.sidebar.subheader("View Card Data")
+        st.sidebar.table(df)
+
+    update_data = st.sidebar.checkbox("Update Data")
+    if update_data:
+        st.sidebar.subheader("Update Card Data")
+        record_id = st.sidebar.number_input("Enter the ID of the record you want to update:", min_value=1,
+                                            max_value=len(df), value=1, step=1)
+        name = st.sidebar.text_input("Name:", df.loc[record_id - 1, 'name'])
+        company = st.sidebar.text_input("Company:", df.loc[record_id - 1, 'company'])
+        email = st.sidebar.text_input("Email:", df.loc[record_id - 1, 'email'])
+        phone = st.sidebar.text_input("Phone:", df.loc[record_id - 1, 'phone'])
+        if st.sidebar.button("Update Record"):
+            c.execute("UPDATE card_data SET name=?, company=?, email=?, phone=? WHERE id=?",
+                      (name, company, email, phone, record_id))
+            conn.commit()
+            st.sidebar.success("Record updated!")
+
+    delete_data = st.sidebar.checkbox("Delete Data")
+    if delete_data:
+        st.sidebar.subheader("Delete Card Data")
+        record_id = st.sidebar.number_input("Enter the ID of the record you want to delete:", min_value=1,
+                                            max_value=len(df), value=1, step=1)
+        if st.sidebar.button("Delete Record"):
+            c.execute("DELETE FROM card_data WHERE id=?", (record_id,))
+            conn.commit()
+            st.sidebar.warning("Record deleted!")
