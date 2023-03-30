@@ -1,6 +1,7 @@
 # BizCardX-Extracting-Business-Card-Data-with-OCR
-The Basic Workflow of the Program: Importing libraries:  
-imports several libraries, including Streamlit, EasyOCR, SQLite, OpenCV, NumPy, and Pandas.                                          
+The Basic Workflow of the Program: 
+
+Imports several libraries, including Streamlit, EasyOCR, SQLite, OpenCV, NumPy, and Pandas.                                          
 Connects to an SQLite database called card_info.db and creates a table  called Business_card to store the extracted information    from the business cards.                                                                   
 The program uses EasyOCR to extract information from images of business cards uploaded by the user.
 
