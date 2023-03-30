@@ -1,118 +1,125 @@
 import streamlit as st
 import easyocr
-import PIL
-from PIL import ImageDraw
-import io
-import csv
-import pandas as pd
 import sqlite3
+import cv2
+import numpy as np
+import pandas as pd
 
-# Set up the Streamlit app title and header
-st.title("BizcardX")
-st.header("Upload your card")
+# Connect to sqlite3 database
+conn = sqlite3.connect('card_info.db')
+c = conn.cursor()
 
-# Allow users to upload a file or enter a file path
-file_type = st.radio("Choose an option:", ("Upload a file", "Enter a file path"))
-bytes_data = None  # Define bytes_data here, with a default value of None
-if file_type == "Upload a file":
-    uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
-    if uploaded_file is not None:
-        bytes_data = uploaded_file.getvalue()
-        im = PIL.Image.open(io.BytesIO(bytes_data))
-        st.image(im)
-else:
-    file_path = st.text_input("Enter file path:")
-    if file_path:
-        with open(file_path, "rb") as f:
-            bytes_data = f.read()
-        im = PIL.Image.open(io.BytesIO(bytes_data))
-        st.image(im)
+# Create a table to store the business card information
+c.execute('''CREATE TABLE IF NOT EXISTS Business_card 
+              (id INT AUTO_INCREMENT PRIMARY KEY,
+              name TEXT,
+              position TEXT,
+              address TEXT,
+              pincode VARCHAR(25),
+              phone VARCHAR(25),
+              email TEXT,
+              website TEXT,
+              company TEXT
+              )''')
 
-if bytes_data is not None:  # Add a check to see if bytes_data has been defined
-    # Extract text data from the image using EasyOCR
-    reader = easyocr.Reader(['en'], gpu=False)
-    bounds = reader.readtext(bytes_data)
+# Using easyOCR for reading data
+reader = easyocr.Reader(['en'])
 
-    # Draw bounding boxes around the text in the image
-    def draw_boxes(image, bounds, color='yellow', width=2):
-        draw = ImageDraw.Draw(image)
-        for bound in bounds:
-            p0, p1, p2, p3 = bound[0]
-            draw.line([*p0, *p1, *p2, *p3, *p0], fill=color, width=width)
-        return image
 
-    #im_with_boxes = draw_boxes(im, bounds)
-    #st.image(im_with_boxes)
+# Title
+st.title(":red[BIZCARDX]")
 
-    # Save the extracted text data to a CSV file and sqlite database
-    data = []
-    for bound in bounds:
-        text = bound[1]
-        data.append([text])
+# Create a file uploader
+file_upload = st.file_uploader(":red[UPLOAD YOUR CARD :]",
+                               type=["jpg", "jpeg", "png"])
 
-    conn = sqlite3.connect('card.db')
-    c = conn.cursor()
 
-    # Create a table for storing card data
-    c.execute('''CREATE TABLE IF NOT EXISTS card_data
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  name TEXT,
-                  company TEXT,
-                  email TEXT,
-                  phone TEXT)''')
-    conn.commit()
 
-    # Insert the extracted data into the card_data table
-    name = ""
-    company = ""
-    email = ""
-    phone = ""
-    for bound in bounds:
-        text = bound[1].strip().lower()
-        if 'name' in text:
-            name = bound[1].split('\n')[1]
-        elif 'company' in text or 'firm' in text:
-            company = bound[1].split('\n')[1]
-        elif 'email' in text:
-            email = bound[1].split('\n')[1]
-        elif 'phone' in text or 'mobile' in text:
-            phone = bound[1].split('\n')[1]
+m = ['Insert Data', 'Display Data', 'Update Data', "Delete Data"]
+choose = st.sidebar.selectbox("Select An Option", m)
 
-    c.execute("INSERT INTO card_data (name, company, email, phone) VALUES (?, ?, ?, ?)", (name, company, email, phone))
-    conn.commit()
+if choose == 'Insert Data':
+    if file_upload is not None:
 
-    # Display the card data in a table within the Streamlit app
-    st.header("Card Data")
-    df = pd.read_sql_query("SELECT * FROM card_data", conn)
-    st.dataframe(df)
-    # Sidebar for viewing, updating, and deleting card data
-    st.sidebar.title("Card Data")
-    view_data = st.sidebar.checkbox("View Data")
-    if view_data:
-        st.sidebar.subheader("View Card Data")
-        st.sidebar.table(df)
+        # Read the image using OpenCV
+        image = cv2.imdecode(np.fromstring(file_upload.read(), np.uint8), 1)
 
-    update_data = st.sidebar.checkbox("Update Data")
-    if update_data:
-        st.sidebar.subheader("Update Card Data")
-        record_id = st.sidebar.number_input("Enter the ID of the record you want to update:", min_value=1,
-                                            max_value=len(df), value=1, step=1)
-        name = st.sidebar.text_input("Name:", df.loc[record_id - 1, 'name'])
-        company = st.sidebar.text_input("Company:", df.loc[record_id - 1, 'company'])
-        email = st.sidebar.text_input("Email:", df.loc[record_id - 1, 'email'])
-        phone = st.sidebar.text_input("Phone:", df.loc[record_id - 1, 'phone'])
-        if st.sidebar.button("Update Record"):
-            c.execute("UPDATE card_data SET name=?, company=?, email=?, phone=? WHERE id=?",
-                      (name, company, email, phone, record_id))
+        # Display the uploaded image
+        st.image(image, caption='Uploaded Successfully', use_column_width=True)
+
+        # Button to extract information from the image
+        if st.button('Extract Data And Save'):
+            dt = reader.readtext(image, detail=0)
+            text = "\n".join(dt)
+
+            # Insert the extracted information and image into the database
+            sql_data = "INSERT INTO Business_card (name, position, address, pincode, phone, email, website, company) VALUES ( ?, ?, ?, ?, ?, ?, ?, ?)"
+            values = (dt[0], dt[1], dt[2], dt[3], dt[4], dt[5], dt[6], dt[7])
+            c.execute(sql_data, values)
             conn.commit()
-            st.sidebar.success("Record updated!")
 
-    delete_data = st.sidebar.checkbox("Delete Data")
-    if delete_data:
-        st.sidebar.subheader("Delete Card Data")
-        record_id = st.sidebar.number_input("Enter the ID of the record you want to delete:", min_value=1,
-                                            max_value=len(df), value=1, step=1)
-        if st.sidebar.button("Delete Record"):
-            c.execute("DELETE FROM card_data WHERE id=?", (record_id,))
-            conn.commit()
-            st.sidebar.warning("Record deleted!")
+            # Display message
+            st.success("Data Saved")
+
+elif choose == 'Display Data':
+
+    # Display the stored business card information
+    c.execute("SELECT * FROM Business_card")
+    result = c.fetchall()
+    df = pd.DataFrame(result,
+                      columns=['id','name', 'position', 'address', 'pincode', 'phone', 'email', 'website', 'company'])
+    st.write(df)
+
+
+elif choose == 'Update Data':
+
+    # Create a dropdown menu to select a business card to edit
+    c.execute("SELECT id, name FROM Business_card")
+    result = c.fetchall()
+    business_cards = {}
+
+    for row in result:
+        business_cards[row[1]] = row[0]
+    select_card_name = st.selectbox("Select Card To Edit", list(business_cards.keys()))
+
+    # Get the current information for the selected business card
+    c.execute("SELECT * FROM Business_card WHERE name=?", (select_card_name,))
+    result = c.fetchone()
+
+    # Get edited information
+    name = st.text_input("Name", result[1])
+    position = st.text_input("Position", result[2])
+    address = st.text_input("Address", result[3])
+    pincode = st.text_input("Pincode", result[4])
+    phone = st.text_input("Phone", result[5])
+    email = st.text_input("Email", result[6])
+    website = st.text_input("Website", result[7])
+    company = st.text_input("Company_Name", result[8])
+
+    # Create a button to update the business card
+    if st.button("Update Data"):
+        # Update the information for the selected business card in the database
+        c.execute(
+            "UPDATE Business_card SET name=?, position=?, address=?, pincode=?, phone=?, email=?, website=?, company=? WHERE name=?",
+            (name, position, address, pincode, phone, email, website, company, select_card_name))
+        conn.commit()
+        st.success("Card Data Updated")
+
+if choose == 'Delete Data':
+
+    # Create a dropdown menu to select a business card to delete
+    c.execute("SELECT id, name FROM Business_card")
+    result = c.fetchall()
+    business_cards = {}
+
+    for row in result:
+        business_cards[row[1]] = row[0]
+    select_card_name = st.selectbox("Select Card To Delete", list(business_cards.keys()))
+
+    # Create a button to delete the selected business card
+    if st.button("Delete Data"):
+        # Delete the selected business card from the database
+        c.execute("DELETE FROM Business_card WHERE name=?", (select_card_name,))
+        conn.commit()
+        st.success("Card Data Deleted")
+
